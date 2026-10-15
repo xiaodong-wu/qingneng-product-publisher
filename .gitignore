@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+venv/
+.env
+.env.*
+env
+*.pem
+*.key
+credentials*.json
+*token*.json
+campaign-runs/
+skill-validation/
+generated_images/
+node_modules/
