@@ -17,7 +17,9 @@ the backend used below. Use public GET endpoints only, never private/admin or su
 servo motors, joint modules, controllers, and I/O. Do not hard-code the count. The list returns
 `code: 0`, `total`, and `rows`; detail/category success also uses `code: 0`. Collect every page, deduplicate `productId`, reject repeated or
 incomplete pages, and record coverage before shuffling. The candidate limit never limits catalog
-pagination. `homeDisplay` is a homepage promotion flag, not eligibility; observed active status
+pagination. Apply [publication history](publication-history.md) exclusions to this complete
+catalog before shuffling; never confuse the candidate budget with history or catalog coverage.
+`homeDisplay` is a homepage promotion flag, not eligibility; observed active status
 is `"0"`. Stop if the contract changes rather than inventing new status meanings.
 
 Use `productName`, `subhead`, `description`, `featuresAndBenefits`, `specifications`, and category

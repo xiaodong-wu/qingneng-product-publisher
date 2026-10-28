@@ -11,6 +11,7 @@ env
 credentials*.json
 *token*.json
 campaign-runs/
+history-checks/
 skill-validation/
 generated_images/
 node_modules/

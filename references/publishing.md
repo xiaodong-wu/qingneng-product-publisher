@@ -20,10 +20,15 @@ ambiguous identity blocks progress. Never substitute a personal profile or anoth
 
 ## Submit and verify
 
-1. Revalidate artifacts and recheck author/target.
+1. Revalidate artifacts, recheck history per [publication-history.md](publication-history.md), and recheck author/target.
 2. Open the page composer, paste exact `facebook.txt`, attach `social-upload.jpg`.
-3. Inspect the rendered preview for complete text, correct image and page author.
-4. Run `update_manifest.py ... --channel facebook --status pending --submission-started`.
+3. Inspect the rendered preview for complete text, correct image and page author. Check the
+   actual AI disclosure control and current platform requirements. Leave a genuinely optional
+   AI label **off by default**. When disclosure is required, provide it truthfully and enable
+   the required setting. Do not disable a mandatory disclosure or remove a platform-applied
+   label. If the distinction cannot be established, stop and report it. Save the observed
+   requirement, control state and reason in the preflight evidence, not a guessed default.
+4. Run `update_manifest.py ... --channel facebook --status pending --submission-started --history HISTORY_JSON`.
    It must succeed before final submit. It records immutable batch hashes.
 5. Click final publish once.
 6. Find the post on the target timeline/published list; verify author ID, text, image, timestamp,
@@ -38,3 +43,8 @@ and final submission requires concrete evidence of absence in
 `evidence/facebook-reconciliation.json`, passed as `--reconciliation JSON`. If absence cannot
 be established, stop as uncertain. Never retry speculatively, downgrade a published status,
 delete successful posts, or republish because reporting failed.
+
+Facebook can apply its own labels even with the optional setting off. Metadata cleanup and
+wording changes cannot guarantee otherwise. An automatic label is not publication failure and
+does not justify deleting/reposting. Record an observed automatic label separately from the
+creator's optional disclosure setting; never claim the post is unlabelled without verification.

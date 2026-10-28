@@ -1,4 +1,4 @@
 interface:
   display_name: "清能社媒自动发布"
   short_description: "从清能官网选品，生成英文图文并发布 Facebook，核验后回写表格"
-  default_prompt: "使用 $qingneng-product-publisher 从清能英文官网随机选取一个产品，完成英文文案与配图，预检通过后发布到指定 Facebook 页面并记录到 Google 表格。"
+  default_prompt: "使用 $qingneng-product-publisher 先检查历史发布记录，再从清能英文官网随机选取未发布产品，保留原文案格式并避免套话，完成配图后发布到指定 Facebook 页面并记录到 Google 表格。可选 AI 标签默认关闭，必需披露如实处理。"

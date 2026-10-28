@@ -3,10 +3,12 @@
 import argparse
 import json
 import sys
+import fcntl
 from datetime import datetime
 from pathlib import Path
 from common import *
 from validate_campaign import validate
+from publication_history import eligible_pool, load_history, scan_local
 
 
 def evidence_path(root, value):
@@ -17,6 +19,40 @@ def evidence_path(root, value):
 
 
 def update(args):
+    if args.submission_started:
+        data = manifest(args.manifest)
+        require(data['mode'] == 'live', 'Dry runs cannot record external submissions or reporting')
+        require(data['channels']['facebook']['status'] != 'published', 'Successful outcome is immutable; skip it when resuming')
+        # Preserve historic frozen batches on explicit resume, but guard every first submit.
+        if not data['submission_history']:
+            history_path = getattr(args, 'history', None) or args.manifest.parent / 'publication-history.json'
+            history = load_history(history_path, max_age=1800)
+            runs_root = Path(history['runs_root'])
+            require(args.manifest.resolve().is_relative_to(runs_root), 'Submission is outside the history runs root')
+            # Serialize the final local check + reservation; two fresh runs cannot submit one product.
+            with (runs_root / '.submission.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                entries = history['entries'] + scan_local(runs_root, exclude=args.manifest)
+                eligible_pool({'products': [{'productId': data['product']['id']}]}, entries, data['product']['id'])
+                # Keep the drafting snapshot stable for its editorial review; freeze the fresh check separately.
+                proof = args.manifest.parent / 'evidence/submission-history.json'
+                write(proof, history)
+                return _update(args)
+    return _update(args)
+
+
+def check_ai_disclosure(preflight):
+    disclosure = preflight.get('ai_disclosure', {})
+    requirement = disclosure.get('requirement')
+    require(requirement in {'optional', 'required', 'not_offered'}, 'AI disclosure requirement must be checked, not assumed')
+    require(type(disclosure.get('enabled')) is bool and bool(disclosure.get('notes')), 'Record actual AI disclosure setting and reason')
+    if requirement == 'required':
+        require(disclosure['enabled'] is True, 'Required AI disclosure must be enabled')
+    else:
+        require(disclosure['enabled'] is False, 'Optional AI label must remain off by default')
+
+
+def _update(args):
     path = args.manifest.resolve()
     root, data = path.parent, manifest(path)
     require(data['mode'] == 'live', 'Dry runs cannot record external submissions or reporting')
@@ -32,6 +68,7 @@ def update(args):
         age = (datetime.now(SHANGHAI) - timestamp(preflight['verified_at'])).total_seconds()
         require(0 <= age <= 1800, 'Refresh preflight within 30 minutes before submit')
         screenshot(root, preflight)
+        check_ai_disclosure(preflight)
         history = data['submission_history']
         require(len(history) < 2, 'Maximum two submissions reached')
         if history:
@@ -85,6 +122,7 @@ def main():
     parser.add_argument('--evidence', type=Path)
     parser.add_argument('--submission-started', action='store_true')
     parser.add_argument('--reconciliation', type=Path)
+    parser.add_argument('--history', type=Path, help='Refreshed history for the final duplicate check (within 30 minutes)')
     print(json.dumps(update(parser.parse_args()), ensure_ascii=False, indent=2))
 
 

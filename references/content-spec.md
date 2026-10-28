@@ -14,6 +14,23 @@ Write 80–150 English words excluding URL and hashtags, in this order:
 4. The full canonical product URL alone on a line.
 5. Eight to twelve distinct relevant hashtags.
 
+Keep this format; improve the writing within it. Start the four feature lines from this product's
+most useful documented distinctions rather than reusing a stock four-sentence pattern. Pick a
+concrete buyer need supported by the source (such as the documented interface, installation
+arrangement, or commissioning function). Explain how those facts inform that buying decision;
+do not invent customer pain points or quantified benefits. Prefer clear technical language to
+empty adjectives. Avoid repeating filler such as "for your engineering team to evaluate" or
+"compare against the requirements of your machine" after every feature.
+
+Use the latest five available published texts in `publication-history.json` as a repetition
+check. Vary feature emphasis, sentence construction, benefit reasoning and the CTA's requested
+next step; preserve qualifications, exact model names and the fixed overall format. A CTA can
+invite discussion of a documented configuration or application without promising unverified
+services. Do not recycle a generic paragraph with only the model or URL replaced. Record
+`editorial_review` in `review.json`, including why this angle suits the product and what changed
+from recent copy. The validator blocks >=55% shared five-word sequences with a recent body
+(URLs/hashtags excluded); passing that heuristic does not replace an actual editorial review.
+
 Avoid unsupported guarantees, certifications, compatibility, performance rankings, ROI, prices,
 MOQ, lead times, and OEM/ODM/private-label claims. Never generalize the catalog's EtherCAT,
 voltage, axes, torque, encoders, or robot compatibility to one model. Include material operating
@@ -42,6 +59,10 @@ fallback; stop for remaining material errors. Do not reselect to hide generator 
 Retain `social.webp` plus temporary `social-upload.jpg`: 1:1, 960–1600 px per side, each ≤750 KiB,
 no EXIF/XMP/ICC/comments. WebP quality floor 68; JPEG floor 72. Never upscale a small source.
 Check readability after optimization. Upload the JPEG and retain the WebP as the canonical asset.
+
+Metadata removal serves file optimization and privacy; it is not a way to promise avoidance of
+AI detection or disclosure. Neither cleaned metadata nor rewritten copy guarantees Facebook
+will not apply its own label. Follow the actual disclosure requirements in [publishing.md](publishing.md).
 
 Machine validation checks structure and evidence consistency, not semantic truth or visual
 accuracy. Source, copy, and image reviews must reflect actual inspection.

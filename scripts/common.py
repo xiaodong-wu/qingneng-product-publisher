@@ -91,7 +91,8 @@ FROZEN_FILES = ['product.json', 'keyword-plan.json', 'facebook.txt', 'review.jso
 
 
 def batch_hashes(root):
-    return {name: digest(Path(root) / name) for name in FROZEN_FILES}
+    files = FROZEN_FILES + [name for name in ['publication-history.json', 'evidence/submission-history.json'] if (Path(root) / name).is_file()]
+    return {name: digest(Path(root) / name) for name in files}
 
 
 def check_frozen(root, data, allow_missing_transport=False):

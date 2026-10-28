@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image
 from common import manifest, read, require, product_url, local, now, write
 from optimize_image import validate as validate_webp
+from publication_history import copy_overlap, recent_posts
 
 
 def words(text):
@@ -70,6 +71,16 @@ def validate(path, require_transport=True):
         require(bool(claim.get('text')) and claim['text'] in text, 'Reviewed claim absent from copy')
     for line in lines[:4]:
         require(any(c['text'] in line for c in claims), 'Feature line lacks a review evidence mapping')
+    if data.get('history_policy') == 1:
+        history = read(root / 'publication-history.json')
+        editorial = review.get('editorial_review', {})
+        for key in ['product_angle', 'specific_buyer_need', 'variation_notes']:
+            require(isinstance(editorial.get(key), str) and bool(editorial[key].strip()), 'Missing editorial review: ' + key)
+        require(editorial.get('history_compared') is True, 'Compare recent copy before publishing')
+        recent = recent_posts(history)
+        require(editorial.get('compared_post_urls') == [p['post_url'] for p in recent], 'Editorial review must identify the recent posts actually compared')
+        for post in recent:
+            require(copy_overlap(text, post['copy']) < 0.55, 'Copy too similar to a recent post; rewrite wording while preserving the required format')
     image_review = review.get('image_review', {})
     require(image_review.get('identity_preserved') is True and image_review.get('text_accurate') is True, 'Image visual review incomplete')
     require(set(image_review.get('reviewed_files', [])) == {'social.webp', 'social-upload.jpg'} and bool(image_review.get('notes')), 'Review optimized images with notes')

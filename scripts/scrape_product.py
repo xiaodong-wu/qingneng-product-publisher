@@ -9,10 +9,11 @@ import sys
 import uuid
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlparse, urlsplit, urlunsplit, quote, parse_qs
+from urllib.parse import urlsplit, urlunsplit, quote
 from urllib.request import Request, build_opener, HTTPRedirectHandler
 from PIL import Image
-from common import SITE, API, SKILL, PAGE_ID, PAGE_URL, SHEET_ID, SHEET_URL, now, read, write, require, manifest, product_url
+from common import SITE, API, SKILL, PAGE_ID, PAGE_URL, SHEET_ID, SHEET_URL, now, read, write, require, manifest
+from publication_history import eligible_pool, load_history, product_id, scan_local
 
 HOSTS = {'en.tsino-dynatron.com', 'enht.tsino-dynatron.com', 'www.tsino-dynatron.com', 'tsino-dynatron.com'}
 MAX_ATTEMPTS = 10
@@ -164,23 +165,37 @@ def run(args):
         write(old_path, old)
         write(job / 'selection-ledger.json', ledger)
         catalog, mode = read(job / 'catalog.json'), old['mode']
+        history_path = getattr(args, 'history', None) or job / 'publication-history.json'
+        history = load_history(history_path, job.parent) if mode == 'live' else read(history_path)
+        write(job / 'publication-history.json', history)
+        entries = history['entries'] + scan_local(job.parent)
+        eligible, skipped = eligible_pool(catalog, entries)
+        ledger['pool'] = [pid for pid in ledger['pool'] if pid in eligible]
+        ledger['history_skipped'] = skipped
+        write(job / 'selection-ledger.json', ledger)
     else:
+        args.output_root.mkdir(parents=True, exist_ok=True)
+        history_path = getattr(args, 'history', None)
+        require(args.mode != 'live' or history_path is not None, 'Live selection requires --history after reading publication records')
+        history = load_history(history_path, args.output_root) if history_path else {
+            'complete': False, 'dry_run_local_only': True, 'checked_at': now(),
+            'runs_root': str(args.output_root.resolve()), 'entries': scan_local(args.output_root)}
+        entries = history['entries'] + scan_local(args.output_root)
         common_js = get(SITE + '/js/common.js').decode()
         require(re.search(r'API_BASE_URL\s*=\s*[\"\']' + re.escape(API) + r'[\"\']', common_js), 'Official backend declaration changed')
         catalog = discover()
         job = (args.output_root / (now().replace(':', '').replace('+', '-') + '-' + uuid.uuid4().hex[:6])).resolve()
         job.mkdir(parents=True)
         write(job / 'catalog.json', catalog)
+        write(job / 'publication-history.json', history)
         (job / 'site-common.js').write_text(common_js)
-        pool = [str(p['productId']) for p in catalog['products']]
-        if args.product_url:
-            selected = parse_qs(urlparse(product_url(args.product_url)).query)['pId'][0]
-            require(selected in pool, 'Target product is absent from active public catalog')
-            pool = [selected]
-        else:
+        selected = product_id(args.product_url) if args.product_url else None
+        pool, skipped = eligible_pool(catalog, entries, selected)
+        if not selected:
             random.SystemRandom().shuffle(pool)
         ledger = {'created_at': now(), 'targeted': bool(args.product_url), 'max_candidates': MAX_ATTEMPTS,
-                  'pool': pool, 'attempts': []}
+                  'history_checked_at': history['checked_at'], 'history_skipped': skipped,
+                  'eligible_count': len(pool), 'pool': pool, 'attempts': []}
         write(job / 'selection-ledger.json', ledger)
         mode = args.mode
     categories = get_json(API + '/api/product/category/list')['data']
@@ -216,9 +231,11 @@ def run(args):
             (folder / hero_name).write_bytes(hero)
             product['hero_path'], product['hero_dimensions'] = hero_name, list(size)
             write(folder / 'product.json', product)
+            write(folder / 'publication-history.json', history)
             (folder / 'source/product.txt').write_text('\n\n'.join(k + '\n' + v for k, v in product['source_fields'].items()), encoding='utf-8')
             path = folder / 'manifest.json'
             data = {'schema_version': 1, 'skill': SKILL, 'created_at': now(), 'mode': mode,
+                    'history_policy': 1,
                     'target': {'website': SITE, 'facebook_page_id': PAGE_ID, 'facebook_page_url': PAGE_URL},
                     'product': {'id': pid, 'title': product['title'], 'url': product['url']},
                     'selection_status': 'selected', 'selection_ledger': '../../selection-ledger.json',
@@ -231,7 +248,8 @@ def run(args):
             attempt.update(status='selected', manifest=str(path.relative_to(job)))
             write(job / 'selection-ledger.json', ledger)
             return {'status': 'source_ready', 'manifest': str(path), 'candidate_count': len(ledger['attempts']),
-                    'catalog_count': catalog['unique_count'], 'title': product['title']}
+                    'catalog_count': catalog['unique_count'], 'eligible_count': ledger['eligible_count'],
+                    'history_skipped': ledger['history_skipped'], 'title': product['title']}
         except CandidateError as exc:
             attempt.update(status='rejected', reason=str(exc))
             write(job / 'selection-ledger.json', ledger)
@@ -249,6 +267,7 @@ def main():
     parser.add_argument('--output-root', type=Path, default=Path.cwd() / 'campaign-runs')
     parser.add_argument('--retry-from', type=Path)
     parser.add_argument('--reason')
+    parser.add_argument('--history', type=Path, help='Fresh reconciled publication-history JSON (required for live selection)')
     args = parser.parse_args()
     skill_dir = Path(__file__).resolve().parents[1]
     require(not args.output_root.resolve().is_relative_to(skill_dir), 'Campaign output must be outside the skill directory; pass --output-root')

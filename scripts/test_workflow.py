@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from PIL import Image
 from common import *
@@ -13,19 +14,21 @@ from scrape_product import discover, ensure_reselectable, safe_url
 from update_manifest import update
 from validate_campaign import validate
 from validate_completion import complete
+from publication_history import build, copy_overlap, eligible_pool, load_history, post_key, scan_local
 
 
 class WorkflowTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.job = Path(self.tmp.name)
+        self.runs = Path(self.tmp.name) / 'runs'
+        self.job = self.runs / 'batch'
         self.root = self.job / 'candidates/01-16'
         self.root.mkdir(parents=True)
         (self.root / 'evidence').mkdir()
         self.path = self.root / 'manifest.json'
         self.url = SITE + '/cp_xqy?pId=16'
         self.post = 'https://www.facebook.com/permalink.php?story_fbid=TEST_ONLY&id=' + PAGE_ID
-        self.data = {'schema_version': 1, 'skill': SKILL, 'mode': 'live',
+        self.data = {'schema_version': 1, 'skill': SKILL, 'mode': 'live', 'history_policy': 1,
                      'target': {'website': SITE, 'facebook_page_id': PAGE_ID, 'facebook_page_url': PAGE_URL},
                      'product': {'id': '16', 'url': self.url, 'title': 'CDMA universal servo drive'},
                      'selection_status': 'selected', 'disabled_channels': ['website', 'linkedin'],
@@ -51,6 +54,8 @@ class WorkflowTests(unittest.TestCase):
         (self.root / 'facebook.txt').write_text(text)
         write(self.root / 'review.json', {'product_url': self.url, 'source_reviewed': True,
               'product_link_verified': True, 'conflicts': [], 'copy_reviewed': True, 'all_claims_supported': True,
+              'editorial_review': {'product_angle': 'Multi-axis commissioning', 'specific_buyer_need': 'Evaluate interface and filtering',
+                                   'variation_notes': 'First fixture, no recent copy', 'history_compared': True, 'compared_post_urls': []},
               'claims': [{'text': c, 'source_field': 'description', 'quote': fields['description']} for c in claims],
               'image_review': {'identity_preserved': True, 'text_accurate': True,
                               'reviewed_files': ['social.webp', 'social-upload.jpg'], 'notes': 'Synthetic offline test fixture only'}})
@@ -60,7 +65,15 @@ class WorkflowTests(unittest.TestCase):
         img.resize((16,16)).save(self.root / 'evidence/test.png')
         write(self.root / 'evidence/facebook-preflight.json', {'page_id': PAGE_ID, 'page_url': PAGE_URL,
               'active_identity_verified': True, 'create_post_available': True, 'verified_at': now(),
+              'ai_disclosure': {'requirement': 'optional', 'enabled': False, 'notes': 'Observed optional toggle is off; synthetic fixture'},
               'visible_page_name': 'TEST FIXTURE', 'screenshot': 'evidence/test.png'})
+        self.sheet_file = Path(self.tmp.name) / 'history/sheet.json'
+        write(self.sheet_file.parent / 'readback.json', {'synthetic_fixture': True, 'values': []})
+        self.sheet = {'spreadsheet_id': SHEET_ID, 'sheet_title': '工作表1', 'headers': HEADERS,
+                      'checked_at': now(), 'complete': True, 'checked_ranges': ['工作表1!A1:E1'],
+                      'raw_readback_file': 'readback.json', 'last_row': 1, 'rows': [], 'resolved_posts': []}
+        write(self.sheet_file, self.sheet)
+        write(self.root / 'publication-history.json', build(self.runs, self.sheet_file))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -198,6 +211,167 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError): safe_url(url)
         for url in [PAGE_URL, 'https://www.facebook.com/123/posts/test', 'https://www.facebook.com.evil.test/page/posts/test']:
             with self.assertRaises(ValueError): post_url(url)
+
+    def historical(self, state='published', pid='16', mode='live', submitted=True):
+        other = self.runs / 'previous/candidates/01-16/manifest.json'
+        data = copy.deepcopy(self.data)
+        data.update(mode=mode)
+        data['product'].update(id=pid, url=SITE + '/cp_xqy?pId=' + pid)
+        data['channels']['facebook'] = {'status': state, 'url': self.post, 'verified_at': now()}
+        data['submission_history'] = [{'started_at': now()}] if submitted else []
+        write(other, data)
+        return other
+
+    def test_history_excludes_published_even_without_sheet_success(self):
+        self.historical()
+        entries = scan_local(self.runs)
+        pool, skipped = eligible_pool({'products': [{'productId': 16}, {'productId': 20}]}, entries)
+        self.assertEqual(pool, ['20'])
+        self.assertEqual(skipped[0]['reason'], 'published')
+
+    def test_history_reserves_uncertain_submission_but_ignores_dry_runs_and_drafts(self):
+        self.historical('uncertain')
+        self.assertEqual(scan_local(self.runs)[0]['state'], 'submitted_unresolved')
+        self.historical(mode='dry-run')
+        self.assertEqual(scan_local(self.runs), [])
+        self.historical('pending', submitted=False)
+        self.assertEqual(scan_local(self.runs), [])
+
+    def test_history_blocks_exhausted_pool_and_targeted_repeat(self):
+        self.historical()
+        entries = scan_local(self.runs)
+        with self.assertRaisesRegex(ValueError, 'No unpublished'):
+            eligible_pool({'products': [{'productId': 16}]}, entries)
+        with self.assertRaisesRegex(ValueError, 'already published'):
+            eligible_pool({'products': [{'productId': 16}, {'productId': 20}]}, entries, '16')
+
+    def test_sheet_only_post_must_be_resolved_before_selection(self):
+        self.sheet['last_row'] = 2
+        self.sheet['rows'] = [{'row_number': 2, 'values': ['en.tsino-dynatron.com', '2026-01-01', '不适用', self.post, '不适用']}]
+        write(self.sheet_file, self.sheet)
+        with self.assertRaisesRegex(ValueError, 'Unresolved historical posts'):
+            build(self.runs, self.sheet_file)
+        (self.sheet_file.parent / 'post.txt').write_text('Synthetic Facebook readback: ' + self.url)
+        self.sheet['resolved_posts'] = [{'post_url': self.post, 'author_verified': True,
+                                        'product_urls': [self.url], 'copy': 'Synthetic product post', 'evidence_file': 'post.txt'}]
+        write(self.sheet_file, self.sheet)
+        result = build(self.runs, self.sheet_file)
+        self.assertEqual(result['entries'][0]['product_id'], '16')
+
+    def test_local_and_sheet_post_aliases_match_and_deduplicate(self):
+        self.historical()
+        alias = 'https://www.facebook.com/' + PAGE_ID + '/posts/TEST_ONLY?tracking=unused'
+        self.assertEqual(post_key(alias), post_key(self.post))
+        self.sheet['rows'] = [{'row_number': n, 'values': ['en.tsino-dynatron.com', '', '不适用', url, '不适用']}
+                              for n, url in [(2, self.post), (3, alias)]]
+        self.sheet['last_row'] = 3
+        write(self.sheet_file, self.sheet)
+        result = build(self.runs, self.sheet_file)
+        self.assertEqual(result['sheet_posts_checked'], 1)
+        self.assertEqual(len(result['entries']), 1)
+
+    def test_missing_stale_or_incomplete_history_blocks_live_selection(self):
+        from scrape_product import run
+        args = argparse.Namespace(retry_from=None, output_root=self.runs, history=None, mode='live')
+        with self.assertRaisesRegex(ValueError, 'requires --history'):
+            run(args)
+        self.sheet['complete'] = False
+        write(self.sheet_file, self.sheet)
+        with self.assertRaisesRegex(ValueError, 'all populated'):
+            build(self.runs, self.sheet_file)
+        self.sheet.update(complete=True, checked_at='2020-01-01T00:00:00+08:00')
+        write(self.sheet_file, self.sheet)
+        with self.assertRaisesRegex(ValueError, 'stale'):
+            build(self.runs, self.sheet_file)
+
+    def test_history_evidence_mutation_blocks_submission(self):
+        write(self.sheet_file.parent / 'readback.json', {'changed': True})
+        with self.assertRaisesRegex(ValueError, 'evidence missing or changed'):
+            self.record('pending', submission_started=True)
+
+    def test_final_guard_catches_another_run_submitted_after_selection(self):
+        self.historical('pending')
+        with self.assertRaisesRegex(ValueError, 'already published or submission unresolved'):
+            self.record('pending', submission_started=True)
+        self.assertEqual(read(self.path)['submission_history'], [])
+
+    def test_optional_ai_label_off_and_required_disclosure_on(self):
+        path = self.root / 'evidence/facebook-preflight.json'
+        data = read(path)
+        data['ai_disclosure']['enabled'] = True
+        write(path, data)
+        with self.assertRaisesRegex(ValueError, 'Optional AI label'):
+            self.record('pending', submission_started=True)
+        data['ai_disclosure'].update(requirement='required', enabled=False)
+        write(path, data)
+        with self.assertRaisesRegex(ValueError, 'Required AI disclosure'):
+            self.record('pending', submission_started=True)
+        data['ai_disclosure']['enabled'] = True
+        write(path, data)
+        self.record('pending', submission_started=True)
+
+    def test_reused_copy_fails_but_original_format_remains_required(self):
+        history_path = self.root / 'publication-history.json'
+        history = read(history_path)
+        text = (self.root / 'facebook.txt').read_text()
+        history['entries'] = [{'state': 'published', 'post_url': self.post, 'at': now(), 'copy': text.replace(self.url, SITE + '/cp_xqy?pId=20')}]
+        write(history_path, history)
+        review_path = self.root / 'review.json'
+        review = read(review_path)
+        review['editorial_review']['compared_post_urls'] = [self.post]
+        write(review_path, review)
+        with self.assertRaisesRegex(ValueError, 'too similar'):
+            validate(self.path)
+        self.assertEqual(copy_overlap(text, text.replace(self.url, SITE + '/cp_xqy?pId=20')), 1.0)
+        (self.root / 'facebook.txt').write_text(text.replace('🔧', 'Feature:'))
+        with self.assertRaisesRegex(ValueError, 'four lines must begin with emojis'):
+            validate(self.path)
+
+    def test_completed_legacy_batches_remain_readable(self):
+        self.publish()
+        data = read(self.path)
+        data.pop('history_policy')
+        data['frozen_artifacts'].pop('publication-history.json')
+        data['frozen_artifacts'].pop('evidence/submission-history.json')
+        write(self.path, data)
+        (self.root / 'publication-history.json').unlink()
+        self.assertEqual(validate(self.path)['status'], 'validated')
+
+    def test_missing_sheet_chunk_blocks_selection(self):
+        self.sheet['last_row'] = 3
+        self.sheet['rows'] = [{'row_number': 3, 'values': ['', '', '', '', '']}]
+        write(self.sheet_file, self.sheet)
+        with self.assertRaisesRegex(ValueError, 'row coverage is incomplete'):
+            build(self.runs, self.sheet_file)
+
+    def test_unreported_platform_post_is_also_excluded(self):
+        (self.sheet_file.parent / 'post.txt').write_text('Synthetic post evidence')
+        self.sheet['resolved_posts'] = [{'post_url': self.post, 'author_verified': True,
+                                        'product_urls': [self.url], 'copy': 'Synthetic product post', 'evidence_file': 'post.txt'}]
+        write(self.sheet_file, self.sheet)
+        history = build(self.runs, self.sheet_file)
+        self.assertEqual(history['entries'][0]['product_id'], '16')
+        self.assertEqual(history['sheet_posts_checked'], 0)
+
+    def test_scraper_selects_only_unused_products_from_full_catalog(self):
+        from scrape_product import run
+        self.historical()
+        output = io.BytesIO()
+        Image.new('RGB', (400, 400)).save(output, 'PNG')
+        catalog = {'products': [{'productId': 16}, {'productId': 20}], 'unique_count': 2}
+        raw = {'productId': 20, 'productName': 'Fixture drive', 'status': '0',
+               'description': ' '.join(['Supported fixture text'] * 20),
+               'coverImage': SITE + '/test.png'}
+        args = argparse.Namespace(retry_from=None, product_url=None, mode='live', output_root=self.runs,
+                                  history=self.root / 'publication-history.json')
+        with patch('scrape_product.discover', return_value=catalog), \
+             patch('scrape_product.get', side_effect=[('API_BASE_URL = "' + API + '"').encode(), output.getvalue()]), \
+             patch('scrape_product.get_json', side_effect=[{'data': []}, {'data': raw}]):
+            result = run(args)
+        selected = read(result['manifest'])
+        self.assertEqual(selected['product']['id'], '20')
+        self.assertEqual(result['eligible_count'], 1)
+        self.assertEqual(result['history_skipped'], [{'product_id': '16', 'reason': 'published'}])
 
 
 if __name__ == '__main__':

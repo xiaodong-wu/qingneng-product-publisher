@@ -25,3 +25,9 @@ empty value in disabled columns. Dry runs validate the prospective row locally w
 Reporting failure never authorizes reposting or rollback. Report Facebook and Sheet states
 separately. The local guard validates evidence consistency; it does not read the Sheet itself.
 Never manufacture evidence from intended values without actual external reads.
+
+Before selection, reuse this Sheet as publication history following
+[publication-history.md](publication-history.md). The five reporting columns stay unchanged:
+product identity comes from the local manifest or verified Facebook body, not an extra column.
+Product-level exclusion prevents new duplicate campaigns; permalink deduplication here prevents
+duplicate reporting of an existing post. Both checks are required.
